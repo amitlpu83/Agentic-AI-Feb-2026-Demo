@@ -4,14 +4,15 @@ Handles: Leave Management, Policy Q&A, Onboarding, Recruitment, Performance Revi
 """
 from __future__ import annotations
 
-import json
+import asyncio
 from datetime import datetime
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, Any
 
-from pathlib import Path
-
 from dotenv import load_dotenv
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
@@ -78,50 +79,24 @@ LEAVE_BALANCES: dict[str, dict[str, int]] = {
 
 LEAVE_REQUESTS: list[dict] = []
 
-HR_POLICIES: dict[str, str] = {
-    "remote_work": """Remote Work Policy:
-- Employees may work remotely up to 3 days per week
-- Remote work requires manager approval for the arrangement
-- Core collaboration hours: 10 am–3 pm in your local timezone
-- Must be reachable via Slack/Teams during core hours
-- Home-office equipment allowance: $500 per year
-- VPN must be used when accessing company systems remotely""",
+# HR_POLICIES live in hr_mcp_server.py — fetched via MCP at runtime.
 
-    "leave": """Leave & Time-Off Policy:
-- Annual leave: 15 days (accrued monthly, max carry-over 5 days)
-- Sick leave: 10 days per year (no carry-over)
-- Personal leave: 3 days per year
-- Parental leave: 16 weeks fully paid (primary caregiver); 4 weeks (secondary)
-- Bereavement: 5 days for immediate family, 3 days for extended family
-- Leave requests require at least 2 weeks advance notice (except sick/emergency)
-- All requests must be submitted through the HR portal""",
+# ─────────────────────────────────────────────
+# MCP Client Helper
+# ─────────────────────────────────────────────
 
-    "performance": """Performance Review Policy:
-- Annual reviews held every December
-- Mid-year check-ins held every June
-- Ratings on a 1–5 scale (1 = Below Expectations, 5 = Exceptional)
-- 360-degree feedback collected from peers and direct reports
-- Performance Improvement Plans (PIP) issued for ratings below 2
-- Merit salary increases tied to performance ratings
-- Promotion eligibility reviewed annually""",
+_MCP_SERVER = str(Path(__file__).parent / "hr_mcp_server.py")
 
-    "code_of_conduct": """Code of Conduct:
-- Treat all colleagues with respect and professionalism
-- Zero tolerance for harassment, discrimination, or bullying
-- Conflicts of interest must be disclosed to HR immediately
-- Confidential information must never be shared outside authorised channels
-- Report violations to HR or the anonymous Ethics Hotline
-- Retaliation against anyone who reports in good faith is strictly prohibited
-- Violations may result in disciplinary action up to and including termination""",
 
-    "compensation": """Compensation & Benefits Policy:
-- Salaries reviewed annually following performance reviews
-- Equity grants vest over 4 years with a 1-year cliff
-- Health insurance: company covers 90% of premium (employee + dependants)
-- 401(k): company matches up to 4% of salary
-- Annual learning & development budget: $1,500 per employee
-- Gym/wellness reimbursement: $50/month""",
-}
+async def _call_mcp_tool(tool_name: str, arguments: dict) -> str:
+    """Spawn the MCP server as a subprocess and call a tool on it."""
+    server_params = StdioServerParameters(command="python3", args=[_MCP_SERVER])
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(tool_name, arguments)
+            return result.content[0].text
+
 
 # ─────────────────────────────────────────────
 # State
@@ -236,26 +211,16 @@ def submit_leave_request(
 
 
 @tool
-def get_hr_policy(policy_topic: str) -> dict:
-    """Retrieve HR policy text on a specific topic.
+def get_hr_policy(policy_topic: str) -> str:
+    """Retrieve HR policy text from the MCP Policy Server.
 
     Args:
         policy_topic: One of: remote_work, leave, performance,
-                      code_of_conduct, compensation.
+                      code_of_conduct, compensation. Partial names accepted.
     """
-    key = policy_topic.lower().replace(" ", "_")
-    if key in HR_POLICIES:
-        return {"topic": key, "policy": HR_POLICIES[key]}
-
-    # Fuzzy fallback
-    for k, policy in HR_POLICIES.items():
-        if key in k or k in key:
-            return {"topic": k, "policy": policy}
-
-    return {
-        "error": f"Policy '{policy_topic}' not found.",
-        "available_topics": list(HR_POLICIES.keys()),
-    }
+    return asyncio.run(
+        _call_mcp_tool("get_hr_policy", {"topic": policy_topic})
+    )
 
 
 @tool
