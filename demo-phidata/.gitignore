@@ -1,0 +1,13 @@
+# LanceDB vector store (auto-generated, can be large)
+tmp/
+tmp/lancedb/
+
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
