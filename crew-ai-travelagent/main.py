@@ -37,7 +37,7 @@ def main():
 
     # Run interactive session
     try:
-        crew.-()
+        crew.run_interactive_session()
     except KeyboardInterrupt:
         print("\n\n👋 Session interrupted. Thank you for using Travel Booking Crew AI!")
     except Exception as e:
